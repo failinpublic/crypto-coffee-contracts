@@ -1,27 +1,32 @@
-.PHONY: build deploy-localnet deploy-devnet
+.PHONY: build deploy upgrade verify remote
+
+NETWORK := https://api.devnet.solana.com
+PROGRAM_ID := 3ujQg6Cqf5XycaPGRbEqZkTwRQSDmE8ThKfZXhCMy5o9
+KEYPAIR := $(HOME)/.config/solana/crypto-coffee/dev-wallet.json
+COMMIT := bd500d170305409694256eea3f3080cfebdf65d0
 
 build:
 	DOCKER_DEFAULT_PLATFORM=linux/amd64 anchor build --verifiable
 
-deploy-localnet:
-	anchor deploy
+deploy:
+	anchor deploy --provider.cluster=$(NETWORK) --provider.wallet=$(KEYPAIR) --verifiable
 
-deploy-devnet:
-	anchor deploy --provider.cluster=devnet \
-		--provider.wallet=$(HOME)/.config/solana/crypto-coffee/dev-wallet.json --verifiable
+upgrade:
+	anchor upgrade --provider.cluster=$(NETWORK) --provider.wallet=$(KEYPAIR) --program-id=$(PROGRAM_ID) ./target/verifiable/crypto_coffee.so
 
-upgrade-devnet:
-	anchor upgrade --provider.cluster=devnet \
-		--provider.wallet=$(HOME)/.config/solana/crypto-coffee/dev-wallet.json \
-		--program-id=3ujQg6Cqf5XycaPGRbEqZkTwRQSDmE8ThKfZXhCMy5o9 \
-		./target/verifiable/crypto_coffee.so
+verify:
+	DOCKER_DEFAULT_PLATFORM=linux/amd64 solana-verify verify-from-repo https://github.com/failinpublic/crypto-coffee-contracts \
+		--url $(PROGRAM_ID) \
+		--program-id $(PROGRAM_ID)  \
+		--commit-hash $(COMMIT) \
+		--library-name crypto_coffee \
+		--keypair $(KEYPAIR)
 
-
-verify-devnet:
-	DOCKER_DEFAULT_PLATFORM=linux/amd64 anchor verify --provider.cluster=devnet \
-			--provider.wallet=$(HOME)/.config/solana/crypto-coffee/dev-wallet.json \
-			--skip-build \
-			--docker-image backpackapp/build:v0.30.1 \
-			--solana-version 2.0.24 \
-			--program-name crypto_coffee \
-			3ujQg6Cqf5XycaPGRbEqZkTwRQSDmE8ThKfZXhCMy5o9
+remote:
+	DOCKER_DEFAULT_PLATFORM=linux/amd64 solana-verify verify-from-repo https://github.com/failinpublic/crypto-coffee-contracts \
+		--url $(PROGRAM_ID) \
+		--program-id $(PROGRAM_ID)  \
+		--commit-hash $(COMMIT) \
+		--library-name crypto_coffee \
+		--keypair $(KEYPAIR) \
+		--remote
