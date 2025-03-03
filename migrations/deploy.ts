@@ -1,16 +1,12 @@
+const web3js= require("@solana/web3.js");
 const anchor = require("@coral-xyz/anchor");
 
 module.exports = async function (provider) {
-  // Configure client to use the provider.
   anchor.setProvider(provider);
 
-  // Retrieve the deployed program from the workspace.
   const program = anchor.workspace.CryptoCoffee;
   const authority = provider.wallet;
-  // Generate a fee destination keypair; you can also replace this with a known public key if desired.
-  const feeDestination = anchor.web3.Keypair.generate();
 
-  // Derive the PDA for the platform state using the seed "platform_state".
   const [platformStatePda] = await anchor.web3.PublicKey.findProgramAddress(
       [Buffer.from("platform_state")],
       program.programId
@@ -24,11 +20,11 @@ module.exports = async function (provider) {
         .initializePlatform(new anchor.BN(5))
         .accounts({
           authority: authority.publicKey,
-          feeDestination: feeDestination.publicKey,
+          feeDestination:  new web3js.PublicKey("CkLt9dfoyawMWLjidvjjFn3ro8kJrXcZ3p9Gvn7bXJk9"),
           platformState: platformStatePda,
           systemProgram: anchor.web3.SystemProgram.programId,
         })
-        .rpc();
+        .rpc({ commitment: "confirmed" });
 
     console.log("Platform initialized at:", platformStatePda.toString());
     console.log("Transaction signature:", tx);

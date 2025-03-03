@@ -11,6 +11,9 @@ build:
 deploy:
 	anchor deploy --provider.cluster=$(NETWORK) --provider.wallet=$(KEYPAIR) --verifiable
 
+migrate:
+	anchor migrate --provider.cluster $(NETWORK) --provider.wallet $(KEYPAIR)
+
 upgrade:
 	anchor upgrade --provider.cluster=$(NETWORK) --provider.wallet=$(KEYPAIR) --program-id=$(PROGRAM_ID) ./target/verifiable/crypto_coffee.so
 
