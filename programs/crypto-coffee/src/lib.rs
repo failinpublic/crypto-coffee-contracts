@@ -45,7 +45,6 @@ pub mod crypto_coffee {
             new_fee_percentage,
         });
 
-
         Ok(())
     }
 
@@ -62,6 +61,7 @@ pub mod crypto_coffee {
         Ok(())
     }
 
+    /// When buying coffee, use the creator's fee discount if available.
     pub fn buy_coffee(
         ctx: Context<BuyCoffee>,
         units_bought: u64,
@@ -72,11 +72,19 @@ pub mod crypto_coffee {
 
         let platform_state = &ctx.accounts.platform_state;
 
+        // Determine fee percentage: use the creator's fee discount if provided.
+        let fee_percentage = if let Some(discount) = &ctx.accounts.creator_fee_discount {
+            discount.fee_percentage
+        } else {
+            platform_state.fee_percentage
+        };
+
+        // Calculate amounts with checked arithmetic.
         let total_amount = units_bought
             .checked_mul(unit_price)
             .ok_or(ErrorCode::ArithmeticOverflow)?;
         let fee_amount = total_amount
-            .checked_mul(platform_state.fee_percentage)
+            .checked_mul(fee_percentage)
             .ok_or(ErrorCode::ArithmeticOverflow)?
             .checked_div(100)
             .ok_or(ErrorCode::ArithmeticOverflow)?;
@@ -84,7 +92,7 @@ pub mod crypto_coffee {
             .checked_sub(fee_amount)
             .ok_or(ErrorCode::ArithmeticOverflow)?;
 
-        // Transfer fee to platform
+        // Transfer fee to platform fee destination.
         anchor_lang::system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
@@ -96,7 +104,7 @@ pub mod crypto_coffee {
             fee_amount,
         )?;
 
-        // Transfer remaining amount to creator
+        // Transfer remaining amount to creator.
         anchor_lang::system_program::transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
@@ -118,6 +126,62 @@ pub mod crypto_coffee {
 
         Ok(())
     }
+
+    /// Add a creator fee discount entry.
+    pub fn add_creator_fee_discount(
+        ctx: Context<AddCreatorFeeDiscount>,
+        fee_percentage: u64,
+    ) -> Result<()> {
+        require!(
+            fee_percentage <= 100,
+            ErrorCode::InvalidFeePercentage
+        );
+
+        let discount = &mut ctx.accounts.creator_discount;
+        discount.creator = ctx.accounts.creator.key();
+        discount.fee_percentage = fee_percentage;
+
+        emit!(CreatorFeeDiscountAdded {
+            creator: discount.creator,
+            fee_percentage,
+        });
+
+        Ok(())
+    }
+
+    /// Update an existing creator fee discount entry.
+    pub fn update_creator_fee_discount(
+        ctx: Context<UpdateCreatorFeeDiscount>,
+        new_fee_percentage: u64,
+    ) -> Result<()> {
+        require!(
+            new_fee_percentage <= 100,
+            ErrorCode::InvalidFeePercentage
+        );
+
+        let discount = &mut ctx.accounts.creator_discount;
+        discount.fee_percentage = new_fee_percentage;
+
+        emit!(CreatorFeeDiscountUpdated {
+            creator: discount.creator,
+            new_fee_percentage,
+        });
+
+        Ok(())
+    }
+
+    pub fn remove_creator_discount(
+        ctx: Context<RemoveCreatorDiscount>,
+    ) -> Result<()> {
+        let discount = &ctx.accounts.creator_discount;
+
+        emit!(CreatorFeeDiscountRemoved {
+            creator: discount.creator,
+        });
+
+
+        Ok(())
+    }
 }
 
 #[derive(Accounts)]
@@ -134,7 +198,7 @@ pub struct InitializePlatform<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    /// CHECK: This account is safe because we only store its pubkey and verify it's a system-owned account
+    /// CHECK: This account is safe because we only store its pubkey and verify it's a system account.
     #[account(owner = System::id() @ ErrorCode::InvalidFeeDestination)]
     pub fee_destination: AccountInfo<'info>,
 
@@ -166,7 +230,7 @@ pub struct UpdateFeeDestination<'info> {
 
     pub authority: Signer<'info>,
 
-    /// CHECK: This account is safe because we only store its pubkey and verify it's a system-owned account
+    /// CHECK: This account is safe because we only store its pubkey and verify it's a system account.
     #[account(owner = System::id() @ ErrorCode::InvalidFeeDestination)]
     pub new_fee_destination: AccountInfo<'info>,
 }
@@ -178,18 +242,100 @@ pub struct BuyCoffee<'info> {
     #[account(mut)]
     pub contributor: Signer<'info>,
 
-    /// CHECK: This is safe as we only transfer SOL to this account
+    /// CHECK: This is safe since we only transfer SOL to this account.
     #[account(mut)]
     pub creator: AccountInfo<'info>,
 
-    /// CHECK: This is safe as we only transfer SOL to this account
+    /// CHECK: This is safe since we only transfer SOL to this account.
     #[account(
         mut,
         constraint = fee_destination.key() == platform_state.fee_destination @ ErrorCode::InvalidFeeDestination
     )]
     pub fee_destination: AccountInfo<'info>,
 
+    #[account(
+        mut,
+        seeds = [b"creator_fee_discount", creator.key().as_ref()],
+        bump
+    )]
+    pub creator_fee_discount: Option<Account<'info, CreatorFeeDiscount>>,
+
     pub system_program: Program<'info, System>,
+}
+
+
+#[derive(Accounts)]
+pub struct AddCreatorFeeDiscount<'info> {
+    #[account(
+        init,
+        payer = authority,
+        space = 8 + CreatorFeeDiscount::LEN,
+        seeds = [b"creator_fee_discount", creator.key().as_ref()],
+        bump
+    )]
+    pub creator_discount: Account<'info, CreatorFeeDiscount>,
+
+    // Include the platform state to enforce that only the platform authority can add discount entries.
+    #[account(
+        seeds = [b"platform_state"],
+        bump,
+        has_one = authority @ ErrorCode::Unauthorized
+    )]
+    pub platform_state: Account<'info, PlatformState>,
+
+    /// CHECK: The creator's account (only used for PDA derivation).
+    pub creator: AccountInfo<'info>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateCreatorFeeDiscount<'info> {
+    #[account(
+        mut,
+        seeds = [b"creator_fee_discount", creator.key().as_ref()],
+        bump
+    )]
+    pub creator_discount: Account<'info, CreatorFeeDiscount>,
+
+    #[account(
+        seeds = [b"platform_state"],
+        bump,
+        has_one = authority @ ErrorCode::Unauthorized
+    )]
+    pub platform_state: Account<'info, PlatformState>,
+
+    /// CHECK: The creator's account (only used for PDA derivation).
+    pub creator: AccountInfo<'info>,
+
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct RemoveCreatorDiscount<'info> {
+    #[account(
+        mut,
+        seeds = [b"creator_fee_discount", creator.key().as_ref()],
+        bump,
+        close = authority
+    )]
+    pub creator_discount: Account<'info, CreatorFeeDiscount>,
+
+    /// CHECK: The creator's account (only used for PDA derivation).
+    pub creator: AccountInfo<'info>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        seeds = [b"platform_state"],
+        bump,
+        has_one = authority @ ErrorCode::Unauthorized
+    )]
+    pub platform_state: Account<'info, PlatformState>,
 }
 
 #[account]
@@ -198,6 +344,20 @@ pub struct PlatformState {
     pub authority: Pubkey,
     pub fee_destination: Pubkey,
     pub fee_percentage: u64,
+}
+
+impl PlatformState {
+    pub const INIT_SPACE: usize = 32 + 32 + 8;
+}
+
+#[account]
+pub struct CreatorFeeDiscount {
+    pub creator: Pubkey,
+    pub fee_percentage: u64,
+}
+
+impl CreatorFeeDiscount {
+    pub const LEN: usize = 32 + 8;
 }
 
 #[error_code]
@@ -215,7 +375,6 @@ pub enum ErrorCode {
     #[msg("Arithmetic overflow occurred")]
     ArithmeticOverflow,
 }
-
 
 #[event]
 pub struct PlatformInitialized {
@@ -241,4 +400,21 @@ pub struct CoffeePurchased {
     pub total_amount: u64,
     pub fee_amount: u64,
     pub creator_amount: u64,
+}
+
+#[event]
+pub struct CreatorFeeDiscountAdded {
+    pub creator: Pubkey,
+    pub fee_percentage: u64,
+}
+
+#[event]
+pub struct CreatorFeeDiscountUpdated {
+    pub creator: Pubkey,
+    pub new_fee_percentage: u64,
+}
+
+#[event]
+pub struct CreatorFeeDiscountRemoved {
+    pub creator: Pubkey,
 }
