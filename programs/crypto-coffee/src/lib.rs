@@ -61,7 +61,6 @@ pub mod crypto_coffee {
         Ok(())
     }
 
-    /// When buying coffee, use the creator's fee discount if available.
     pub fn buy_coffee(
         ctx: Context<BuyCoffee>,
         units_bought: u64,
@@ -79,7 +78,7 @@ pub mod crypto_coffee {
             platform_state.fee_percentage
         };
 
-        // Calculate amounts with checked arithmetic.
+        // Calculate amounts
         let total_amount = units_bought
             .checked_mul(unit_price)
             .ok_or(ErrorCode::ArithmeticOverflow)?;
@@ -127,7 +126,6 @@ pub mod crypto_coffee {
         Ok(())
     }
 
-    /// Add a creator fee discount entry.
     pub fn add_creator_fee_discount(
         ctx: Context<AddCreatorFeeDiscount>,
         fee_percentage: u64,
@@ -149,7 +147,6 @@ pub mod crypto_coffee {
         Ok(())
     }
 
-    /// Update an existing creator fee discount entry.
     pub fn update_creator_fee_discount(
         ctx: Context<UpdateCreatorFeeDiscount>,
         new_fee_percentage: u64,
@@ -275,7 +272,6 @@ pub struct AddCreatorFeeDiscount<'info> {
     )]
     pub creator_discount: Account<'info, CreatorFeeDiscount>,
 
-    // Include the platform state to enforce that only the platform authority can add discount entries.
     #[account(
         seeds = [b"platform_state"],
         bump,
