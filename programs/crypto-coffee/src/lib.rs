@@ -11,7 +11,7 @@ pub mod crypto_coffee {
         platform_fee_percentage: u64,
     ) -> Result<()> {
         require!(
-            platform_fee_percentage <= 100 && platform_fee_percentage > 0,
+            platform_fee_percentage <= 100,
             ErrorCode::InvalidFeePercentage
         );
 
@@ -19,6 +19,12 @@ pub mod crypto_coffee {
         state.authority = ctx.accounts.authority.key();
         state.fee_destination = ctx.accounts.fee_destination.key();
         state.fee_percentage = platform_fee_percentage;
+
+        emit!(PlatformInitialized {
+            authority: state.authority,
+            fee_destination: state.fee_destination,
+            fee_percentage: state.fee_percentage,
+        });
 
         Ok(())
     }
@@ -28,12 +34,17 @@ pub mod crypto_coffee {
         new_fee_percentage: u64,
     ) -> Result<()> {
         require!(
-            new_fee_percentage <= 100 && new_fee_percentage > 0,
+            new_fee_percentage <= 100,
             ErrorCode::InvalidFeePercentage
         );
 
         let state = &mut ctx.accounts.platform_state;
         state.fee_percentage = new_fee_percentage;
+
+        emit!(FeeUpdated {
+            new_fee_percentage,
+        });
+
 
         Ok(())
     }
@@ -43,6 +54,10 @@ pub mod crypto_coffee {
     ) -> Result<()> {
         let state = &mut ctx.accounts.platform_state;
         state.fee_destination = ctx.accounts.new_fee_destination.key();
+
+        emit!(FeeDestinationUpdated {
+            new_fee_destination: state.fee_destination,
+        });
 
         Ok(())
     }
@@ -57,10 +72,17 @@ pub mod crypto_coffee {
 
         let platform_state = &ctx.accounts.platform_state;
 
-        // Calculate amounts
-        let total_amount = units_bought * unit_price;
-        let fee_amount = (total_amount * platform_state.fee_percentage) / 100;
-        let creator_amount = total_amount - fee_amount;
+        let total_amount = units_bought
+            .checked_mul(unit_price)
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
+        let fee_amount = total_amount
+            .checked_mul(platform_state.fee_percentage)
+            .ok_or(ErrorCode::ArithmeticOverflow)?
+            .checked_div(100)
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
+        let creator_amount = total_amount
+            .checked_sub(fee_amount)
+            .ok_or(ErrorCode::ArithmeticOverflow)?;
 
         // Transfer fee to platform
         anchor_lang::system_program::transfer(
@@ -85,6 +107,14 @@ pub mod crypto_coffee {
             ),
             creator_amount,
         )?;
+
+        emit!(CoffeePurchased {
+            contributor: ctx.accounts.contributor.key(),
+            creator: ctx.accounts.creator.key(),
+            total_amount,
+            fee_amount,
+            creator_amount,
+        });
 
         Ok(())
     }
@@ -172,7 +202,7 @@ pub struct PlatformState {
 
 #[error_code]
 pub enum ErrorCode {
-    #[msg("Invalid platform fee specified")]
+    #[msg("Invalid platform fee specified. Fee must be between 0 and 100.")]
     InvalidFeePercentage,
     #[msg("Unauthorized")]
     Unauthorized,
@@ -182,4 +212,33 @@ pub enum ErrorCode {
     InvalidUnits,
     #[msg("Unit price must be greater than 0")]
     InvalidUnitPrice,
+    #[msg("Arithmetic overflow occurred")]
+    ArithmeticOverflow,
+}
+
+
+#[event]
+pub struct PlatformInitialized {
+    pub authority: Pubkey,
+    pub fee_destination: Pubkey,
+    pub fee_percentage: u64,
+}
+
+#[event]
+pub struct FeeUpdated {
+    pub new_fee_percentage: u64,
+}
+
+#[event]
+pub struct FeeDestinationUpdated {
+    pub new_fee_destination: Pubkey,
+}
+
+#[event]
+pub struct CoffeePurchased {
+    pub contributor: Pubkey,
+    pub creator: Pubkey,
+    pub total_amount: u64,
+    pub fee_amount: u64,
+    pub creator_amount: u64,
 }
