@@ -480,4 +480,114 @@ describe("crypto-coffee", () => {
         });
     });
 
+    describe("buy coffee with zero fees", () => {
+        const authority = provider.wallet;
+        const feeDestination = anchor.web3.Keypair.generate();
+        const creator = anchor.web3.Keypair.generate();
+        const contributor = anchor.web3.Keypair.generate();
+
+        // The platform PDA is derived from a fixed seed.
+        const [platformStatePda] = PublicKey.findProgramAddressSync(
+            [Buffer.from("platform_state")],
+            program.programId
+        );
+
+        before(async () => {
+            // Airdrop funds to ensure accounts have enough SOL for transactions.
+            await provider.connection.requestAirdrop(
+                contributor.publicKey,
+                5 * anchor.web3.LAMPORTS_PER_SOL
+            );
+            await provider.connection.requestAirdrop(
+                creator.publicKey,
+                2 * anchor.web3.LAMPORTS_PER_SOL
+            );
+            await provider.connection.requestAirdrop(
+                feeDestination.publicKey,
+                2 * anchor.web3.LAMPORTS_PER_SOL
+            );
+
+            // Initialize the platform with an initial fee (e.g., 10%).
+            // We do this only if the platform hasn't been initialized yet.
+            try {
+                await program.methods
+                    .initializePlatform(new anchor.BN(10))
+                    .accounts({
+                        authority: authority.publicKey,
+                        feeDestination: feeDestination.publicKey
+                    })
+                    .rpc();
+            } catch (err) {
+                // If already initialized, we can ignore the error.
+                console.log("Platform already initialized, updating fee destination...");
+
+                // Explicitly update fee destination to our test's feeDestination
+                await program.methods
+                    .updateFeeDestination()
+                    .accounts({
+                        // @ts-ignore
+                        authority: authority.publicKey,
+                        newFeeDestination: feeDestination.publicKey,
+                    })
+                    .rpc();
+            }
+
+            // Update the fee to 0% to test the zero fee scenario.
+            await program.methods
+                .updateFee(new anchor.BN(0))
+                .accounts({
+                    platformState: platformStatePda,
+                    authority: authority.publicKey,
+                })
+                .rpc();
+        });
+
+        it("Processes payment correctly when fee is 0%", async () => {
+            // Verify that the platform state fee percentage is now 0.
+            const platformState = await program.account.platformState.fetch(platformStatePda);
+            expect(platformState.feePercentage.toNumber()).to.equal(0);
+
+            // Record initial balances for the contributor, creator, and fee destination.
+            const initialContributorBalance = await provider.connection.getBalance(contributor.publicKey);
+            const initialCreatorBalance = await provider.connection.getBalance(creator.publicKey);
+            const initialFeeDestBalance = await provider.connection.getBalance(feeDestination.publicKey);
+
+            // Set the payment parameters.
+            const unitPrice = new anchor.BN(1_000_000);
+            const units = new anchor.BN(5);
+
+            // Calculate the expected amounts.
+            const totalAmount = unitPrice.toNumber() * units.toNumber();
+            const expectedFeeAmount = 0; // With 0% fee, no fee is taken.
+            const expectedCreatorAmount = totalAmount; // Creator should receive the full amount.
+
+            // Perform the buyCoffee transaction.
+            await program.methods
+                .buyCoffee(units, unitPrice)
+                .accounts({
+                    platformState: platformStatePda,
+                    contributor: contributor.publicKey,
+                    creator: creator.publicKey,
+                    feeDestination: feeDestination.publicKey,
+                })
+                .signers([contributor])
+                .rpc();
+
+            // Get final balances.
+            const finalContributorBalance = await provider.connection.getBalance(contributor.publicKey);
+            const finalCreatorBalance = await provider.connection.getBalance(creator.publicKey);
+            const finalFeeDestBalance = await provider.connection.getBalance(feeDestination.publicKey);
+
+            // Determine the changes in balances.
+            const contributorChange = initialContributorBalance - finalContributorBalance;
+            const creatorChange = finalCreatorBalance - initialCreatorBalance;
+            const feeDestChange = finalFeeDestBalance - initialFeeDestBalance;
+
+            // Validate that the contributor was debited the total amount,
+            // the creator received the entire payment, and the fee destination was unchanged.
+            expect(contributorChange).to.equal(totalAmount);
+            expect(creatorChange).to.equal(expectedCreatorAmount);
+            expect(feeDestChange).to.equal(expectedFeeAmount);
+        });
+    });
 });
